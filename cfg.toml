@@ -1,0 +1,4 @@
+# Sets the country code for the ESP32S3's wifi driver. This should be set properly to ensure
+# you're complying with your local regulations on transmission power.
+[esp-wifi]
+country_code = "US"

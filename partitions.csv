@@ -1,0 +1,5 @@
+# Name,      Type, SubType,   Offset,     Size,      Flags
+nvs,         data, nvs,       0x00009000, 0x00006000
+phy_init,    data, phy,       0x0000f000, 0x00001000
+os,          app,  factory,   0x00010000, 0x00100000
+tickv,       data, undefined, 0x00110000, 0x006f0000

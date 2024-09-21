@@ -1,0 +1,13 @@
+partition_table = "./partitions.bin"
+
+[connection]
+
+# Change these settings to fit your board.
+[[usb_device]]
+vid = "303a"
+pid = "1001"
+
+[flash]
+mode = "dio"
+size = "8MB"
+frequency = "40MHz"
