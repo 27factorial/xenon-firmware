@@ -4,7 +4,6 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(async_closure)]
-
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 #[cfg(not(target_pointer_width = "32"))]

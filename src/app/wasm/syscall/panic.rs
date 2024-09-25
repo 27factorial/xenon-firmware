@@ -21,7 +21,7 @@ syscalls! {
         })?;
 
         log::error!(
-            "WASM app panicked! message: {message}\n"
+            "Wasm app panicked! message: {message}\n"
         );
 
         Ok(())

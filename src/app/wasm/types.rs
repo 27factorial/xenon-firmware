@@ -235,7 +235,7 @@ impl EnvData {
     pub fn push_critical_section(&mut self) {
         let cpu = esp_hal::get_core();
         let state = unsafe { cs::acquire() };
-        atomic::fence(Ordering::Acquire);
+        atomic::fence(Ordering::SeqCst);
 
         self.critical_sections.push((cpu, state));
     }
@@ -244,7 +244,7 @@ impl EnvData {
         match self.critical_sections.pop() {
             Some((cpu, state)) => unsafe {
                 if cpu == esp_hal::get_core() {
-                    atomic::fence(Ordering::Release);
+                    atomic::fence(Ordering::SeqCst);
 
                     // SAFETY: the state passed to `release` is the most recent critical section
                     // `RestoreState` that was created in wasm, and comes from the current core.
@@ -279,14 +279,14 @@ impl EnvData {
 
 impl Drop for EnvData {
     fn drop(&mut self) {
+        let current_core = esp_hal::get_core();
+
         // Critical section `RestoreState`s are pushed to the end of the vector after calling
         // `acquire`, so when dropped, every element must be released with `release` in the reverse
         // order they were pushed, otherwise it could cause UB. This only comes up if there was some
         // error in wasm-land which caused the app to abort before a critical section was properly
         // released.
-
-        let current_core = esp_hal::get_core();
-
+        //
         // SAFETY: every `RestoreState` in the function is guaranteed to have come from a
         // corresponding `acquire` and is released in the opposite order that it was pushed,
         // ensuring that nested critical sections properly release their `RestoreState`.
