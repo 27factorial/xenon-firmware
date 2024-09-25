@@ -51,7 +51,7 @@ unsafe impl GlobalAlloc for Allocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        cs::with(|_| {
+        cs::with(|_| unsafe {
             self.0
                 .lock()
                 .deallocate(NonNull::new_unchecked(ptr), layout)

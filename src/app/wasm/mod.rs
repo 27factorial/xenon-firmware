@@ -1,6 +1,4 @@
 use embassy_executor::SendSpawner;
-use embassy_sync::blocking_mutex::raw::RawMutex;
-use embassy_sync::mutex::{Mutex, MutexGuard};
 use esp_hal::rng::Trng;
 use types::Executor;
 

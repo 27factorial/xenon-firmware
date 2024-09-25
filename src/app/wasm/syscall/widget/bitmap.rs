@@ -45,7 +45,7 @@ async fn draw_compressed_bitmap_internal(
     index: usize,
     position: Point,
 ) {
-    let env_data = env.lock_async().await;
+    let env_data = env.lock().await;
     let data = env_data.get_binary_data(index).unwrap();
 
     let bitmap = CompressedBitmapRef::new(width, height, data);
@@ -55,7 +55,7 @@ async fn draw_compressed_bitmap_internal(
 
 #[task]
 async fn draw_bitmap_internal(env: Env, width: u8, height: u8, index: usize, position: Point) {
-    let env = env.lock_async().await;
+    let env = env.lock().await;
     let data = env.get_binary_data(index).unwrap();
 
     let bitmap = BitmapRef::new_prechecked(width, height, data);
@@ -69,14 +69,14 @@ syscalls! {
         ptr: usize,
         len: usize,
     ) -> Result<i32, wasmi::Error> {
-        let memory = caller.data().lock().memory();
+        let memory = caller.data().lock_sync().memory();
         let end = ptr + len;
 
         let bytes = memory.data(&caller)
             .get(ptr..end)
             .ok_or(Error::InvalidMemoryRange { start: ptr, end })?;
 
-        let idx = caller.data().lock().push_binary_data(bytes);
+        let idx = caller.data().lock_sync().push_binary_data(bytes);
 
         Ok(idx as i32)
     }
@@ -89,7 +89,7 @@ syscalls! {
         e1_ptr: usize,
         e2_ptr: usize,
     ) -> Result<i32, wasmi::Error> {
-        let memory = caller.data().lock().memory();
+        let memory = caller.data().lock_sync().memory();
 
         let expected_len = bitmap::expected_data_len(width, height);
         let end = ptr + expected_len;
@@ -108,7 +108,7 @@ syscalls! {
             }
         };
 
-        let idx = caller.data().lock().push_binary_data(bitmap.data());
+        let idx = caller.data().lock_sync().push_binary_data(bitmap.data());
 
         Ok(idx as i32)
     }
@@ -121,7 +121,7 @@ syscalls! {
         e1_ptr: usize,
         e2_ptr: usize,
     ) -> Result<i32, wasmi::Error> {
-        let mut env = caller.data().lock();
+        let mut env = caller.data().lock_sync();
         let memory = env.memory();
 
         let data = usize::try_from(id)
@@ -157,7 +157,7 @@ syscalls! {
         y: i32,
     ) -> Result<(), wasmi::Error> {
         let env = caller.data();
-        let env_data = env.lock();
+        let env_data = env.lock_sync();
 
         let index = usize::try_from(id).map_err(|_| Error::InvalidId(id))?;
 
@@ -186,7 +186,7 @@ syscalls! {
         y: i32,
     ) -> Result<(), wasmi::Error> {
         let env = caller.data();
-        let env_data = env.lock();
+        let env_data = env.lock_sync();
 
         let index = usize::try_from(id).map_err(|_| Error::InvalidId(id))?;
         let data = env_data.get_binary_data(index).ok_or(Error::InvalidId(id))?;
@@ -212,7 +212,7 @@ syscalls! {
         x: u8,
         y: u8,
     ) -> Result<u32, wasmi::Error> {
-        let env = caller.data().lock();
+        let env = caller.data().lock_sync();
 
         let index = usize::try_from(id).map_err(|_| Error::InvalidId(id))?;
         let data = env.get_binary_data(index).ok_or(Error::InvalidId(id))?;
@@ -236,7 +236,7 @@ syscalls! {
         y: u8,
         pixel_color: u32,
     ) -> Result<(), wasmi::Error> {
-        let mut env = caller.data().lock();
+        let mut env = caller.data().lock_sync();
 
         let index = usize::try_from(id).map_err(|_| Error::InvalidId(id))?;
         let data = env.get_binary_data_mut(index).ok_or(Error::InvalidId(id))?;

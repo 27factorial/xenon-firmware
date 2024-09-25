@@ -109,7 +109,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_arc_internal(Styled::new(arc, style)))?;
+        caller.data().lock_sync().spawn(draw_arc_internal(Styled::new(arc, style)))?;
 
 
         Ok(())
@@ -134,7 +134,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_circle_internal(Styled::new(circle, style)))?;
+        caller.data().lock_sync().spawn(draw_circle_internal(Styled::new(circle, style)))?;
 
         Ok(())
     }
@@ -160,7 +160,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_ellipse_internal(Styled::new(ellipse, style)))?;
+        caller.data().lock_sync().spawn(draw_ellipse_internal(Styled::new(ellipse, style)))?;
 
         Ok(())
     }
@@ -182,7 +182,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_line_internal(Styled::new(line, style)))?;
+        caller.data().lock_sync().spawn(draw_line_internal(Styled::new(line, style)))?;
 
         Ok(())
     }
@@ -208,7 +208,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_rectangle_internal(Styled::new(rectangle, style)))?;
+        caller.data().lock_sync().spawn(draw_rectangle_internal(Styled::new(rectangle, style)))?;
 
         Ok(())
     }
@@ -231,7 +231,7 @@ syscalls! {
         const CORNER_ELEMS: usize = size_of::<u32>() * 8;
 
 
-        let memory = caller.data().lock().memory();
+        let memory = caller.data().lock_sync().memory();
 
         let corners_end = corners_ptr + CORNER_ELEMS;
         let corners = memory
@@ -266,7 +266,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_rounded_rectangle_internal(Styled::new(rounded_rectangle, style)))?;
+        caller.data().lock_sync().spawn(draw_rounded_rectangle_internal(Styled::new(rounded_rectangle, style)))?;
 
         Ok(())
     }
@@ -294,7 +294,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_sector_internal(Styled::new(sector, style)))?;
+        caller.data().lock_sync().spawn(draw_sector_internal(Styled::new(sector, style)))?;
 
         Ok(())
     }
@@ -320,7 +320,7 @@ syscalls! {
 
         let style = style!(fill_color, stroke_color, stroke_width, stroke_alignment);
 
-        caller.data().lock().spawn(draw_triangle_internal(Styled::new(triangle, style)))?;
+        caller.data().lock_sync().spawn(draw_triangle_internal(Styled::new(triangle, style)))?;
 
         Ok(())
     }

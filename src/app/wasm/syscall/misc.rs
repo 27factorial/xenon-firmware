@@ -12,14 +12,14 @@ syscalls! {
     pub extern "wasm" fn clear_buffer(
         caller
     ) -> Result<(), wasmi::Error> {
-        caller.data().lock().spawn(clear_internal())
+        caller.data().lock_sync().spawn(clear_internal())
     }
 
     pub extern "wasm" fn clone_binary_data(
         caller,
         id: i32,
     ) -> Result<i32, wasmi::Error> {
-        let mut env = caller.data().lock();
+        let mut env = caller.data().lock_sync();
         let data = usize::try_from(id)
             .map_err(|_| Error::InvalidId(id))
             .and_then(|index| env.get_binary_data(index).ok_or(Error::InvalidId(id)))?
@@ -34,7 +34,7 @@ syscalls! {
         caller,
         id: i32,
     ) -> Result<(), wasmi::Error> {
-        let mut env = caller.data().lock();
+        let mut env = caller.data().lock_sync();
         let index = usize::try_from(id)
             .map_err(|_| Error::InvalidId(id))?;
 

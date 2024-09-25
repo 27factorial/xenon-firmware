@@ -6,7 +6,7 @@ syscalls! {
         ptr: usize,
         len: usize,
     ) -> Result<(), wasmi::Error> {
-        let memory = caller.data().lock().memory();
+        let memory = caller.data().lock_sync().memory();
         let end = ptr + len;
 
         let bytes = memory

@@ -3,10 +3,13 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::RangeBounds;
 use core::result;
+use core::sync::atomic::{self, Ordering};
+use critical_section as cs;
 use embassy_executor::{SendSpawner, SpawnToken};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as CsRawMutex;
 use embassy_sync::mutex::{Mutex, MutexGuard};
 use esp_hal::rng::Trng;
+use esp_hal::Cpu;
 use thiserror::Error;
 use wasmi::core::HostError;
 use wasmi::{
@@ -58,7 +61,10 @@ fn link_syscalls(linker: &mut Linker<Env>) -> Result<()> {
         (widget::set_bitmap_pixel, "set_bitmap_pixel"),
         (misc::clear_buffer, "clear_buffer"),
         (misc::clone_binary_data, "clone_binary_data"),
-        (misc::drop_binary_data, "drop_binary_data");
+        (misc::drop_binary_data, "drop_binary_data"),
+        (asynch::cs_acquire, "cs_acquire"),
+        (asynch::cs_release, "cs_release"),
+        (asynch::wait, "wait");
         linker
     ];
 
@@ -103,7 +109,7 @@ impl Executor {
             .get_memory(&store, "memory")
             .ok_or(Error::NoMemory)?;
 
-        store.data().lock().set_memory(memory);
+        store.data().lock_sync().set_memory(memory);
 
         Ok(Self { instance, store })
     }
@@ -133,7 +139,7 @@ impl Env {
         }
     }
 
-    pub fn lock(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
+    pub fn lock_sync(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
         loop {
             match self.data.try_lock() {
                 Ok(guard) => break guard,
@@ -142,7 +148,7 @@ impl Env {
         }
     }
 
-    pub async fn lock_async(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
+    pub async fn lock(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
         self.data.lock().await
     }
 }
@@ -151,7 +157,9 @@ pub struct EnvData {
     rng: Trng<'static>,
     spawner: SendSpawner,
     binary_data: BinaryData,
+    critical_sections: Vec<(Cpu, cs::RestoreState)>,
     memory: Option<Memory>,
+    notified: bool,
 }
 
 impl EnvData {
@@ -160,7 +168,9 @@ impl EnvData {
             spawner,
             rng,
             binary_data: BinaryData::new(),
+            critical_sections: Vec::new(),
             memory: None,
+            notified: false,
         }
     }
 
@@ -222,6 +232,40 @@ impl EnvData {
         u64::from_ne_bytes(buf)
     }
 
+    pub fn push_critical_section(&mut self) {
+        let cpu = esp_hal::get_core();
+        let state = unsafe { cs::acquire() };
+        atomic::fence(Ordering::Acquire);
+
+        self.critical_sections.push((cpu, state));
+    }
+
+    pub fn pop_critical_section(&mut self) -> Result<()> {
+        match self.critical_sections.pop() {
+            Some((cpu, state)) => unsafe {
+                if cpu == esp_hal::get_core() {
+                    atomic::fence(Ordering::Release);
+
+                    // SAFETY: the state passed to `release` is the most recent critical section
+                    // `RestoreState` that was created in wasm, and comes from the current core.
+                    cs::release(state);
+                    Ok(())
+                } else {
+                    panic!("attempted to release critical section from a different core");
+                }
+            },
+            None => Err(Error::MismatchedCriticalSection.into()),
+        }
+    }
+
+    pub fn is_notified(&mut self) -> bool {
+        self.notified
+    }
+
+    pub fn set_notified(&mut self, notified: bool) {
+        self.notified = notified;
+    }
+
     pub fn random_bytes(&mut self, bytes: &mut [u8]) {
         self.rng.read(bytes)
     }
@@ -230,6 +274,32 @@ impl EnvData {
         self.spawner
             .spawn(token)
             .map_err(|_| Error::TooManyTasks.into())
+    }
+}
+
+impl Drop for EnvData {
+    fn drop(&mut self) {
+        // Critical section `RestoreState`s are pushed to the end of the vector after calling
+        // `acquire`, so when dropped, every element must be released with `release` in the reverse
+        // order they were pushed, otherwise it could cause UB. This only comes up if there was some
+        // error in wasm-land which caused the app to abort before a critical section was properly
+        // released.
+
+        let current_core = esp_hal::get_core();
+
+        // SAFETY: every `RestoreState` in the function is guaranteed to have come from a
+        // corresponding `acquire` and is released in the opposite order that it was pushed,
+        // ensuring that nested critical sections properly release their `RestoreState`.
+        self.critical_sections
+            .drain(..)
+            .rev()
+            .for_each(|(core, state)| unsafe {
+                if core == current_core {
+                    cs::release(state);
+                } else {
+                    panic!("attempted to release critical section from a different core");
+                }
+            });
     }
 }
 
@@ -338,6 +408,8 @@ pub enum Error {
     InvalidId(i32),
     #[error("attempted to spawn too many tasks")]
     TooManyTasks,
+    #[error("undefined behavior: mismatched critical section release")]
+    MismatchedCriticalSection,
     #[error("module panicked")]
     Panicked,
 }
@@ -349,3 +421,17 @@ impl From<Error> for wasmi::Error {
 }
 
 impl HostError for Error {}
+
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Error)]
+pub enum AsyncEvent {
+    #[error("`wait` syscall called")]
+    Wait,
+}
+
+impl From<AsyncEvent> for wasmi::Error {
+    fn from(value: AsyncEvent) -> Self {
+        wasmi::Error::host(value)
+    }
+}
+
+impl HostError for AsyncEvent {}

@@ -5,6 +5,8 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(async_closure)]
 
+#![forbid(unsafe_op_in_unsafe_fn)]
+
 #[cfg(not(target_pointer_width = "32"))]
 compile_error!("Xenon may only be used on 32-bit architectures.");
 

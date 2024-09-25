@@ -4,3 +4,4 @@ pub mod widget;
 pub mod misc;
 pub mod rng;
 pub mod panic;
+pub mod asynch;

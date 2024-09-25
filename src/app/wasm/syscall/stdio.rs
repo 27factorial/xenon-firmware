@@ -19,7 +19,7 @@ pub fn print(
     let end = ptr + len;
     let new_line = if newline { "\n" } else { "" };
 
-    let memory = caller.data().lock().memory();
+    let memory = caller.data().lock_sync().memory();
     let range = memory
         .data(&caller)
         .get(ptr..end)
@@ -36,12 +36,7 @@ pub fn print(
     Ok(())
 }
 
-pub fn log(
-    caller: Caller<'_, Env>,
-    level: u32,
-    ptr: u32,
-    len: u32,
-) -> Result<(), wasmi::Error> {
+pub fn log(caller: Caller<'_, Env>, level: u32, ptr: u32, len: u32) -> Result<(), wasmi::Error> {
     let (ptr, len) = cvt!(ptr as usize, len as usize);
     let end = ptr + len;
 
@@ -54,7 +49,7 @@ pub fn log(
         unknown => return Err(Error::InvalidLogLevel(unknown).into()),
     };
 
-    let memory = caller.data().lock().memory();
+    let memory = caller.data().lock_sync().memory();
     let range = memory
         .data(&caller)
         .get(ptr..end)
@@ -66,10 +61,7 @@ pub fn log(
         valid_up_to: e.valid_up_to(),
     })?;
 
-    log::log!(
-        level, 
-        "{string}"
-    );
+    log::log!(level, "{string}");
 
     Ok(())
 }
