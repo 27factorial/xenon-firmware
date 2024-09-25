@@ -1,4 +1,4 @@
-use crate::app::wasm::types::Error;
+use crate::app::types::Error;
 use crate::macros::syscalls;
 
 syscalls! {

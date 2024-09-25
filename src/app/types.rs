@@ -38,7 +38,7 @@ macro_rules! link_syscalls {
 }
 
 fn link_syscalls(linker: &mut Linker<Env>) -> Result<()> {
-    use crate::app::wasm::syscall::*;
+    use crate::app::syscall::*;
 
     link_syscalls![
         (stdio::print, "print"),

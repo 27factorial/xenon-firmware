@@ -1,4 +1,4 @@
-use crate::{app::wasm::types::Error, macros::syscalls};
+use crate::{app::types::Error, macros::syscalls};
 
 syscalls! {
     pub extern "wasm" fn panic(

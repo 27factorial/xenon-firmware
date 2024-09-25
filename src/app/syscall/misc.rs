@@ -1,4 +1,4 @@
-use crate::app::wasm::types::Error;
+use crate::app::types::Error;
 use crate::driver::lcd::LCD_BUFFER;
 use crate::macros::syscalls;
 use embassy_executor::task;

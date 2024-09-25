@@ -1,4 +1,4 @@
-use crate::{app::wasm::types::AsyncEvent, macros::syscalls};
+use crate::{app::types::AsyncEvent, macros::syscalls};
 
 syscalls! {
     pub extern "wasm" fn cs_acquire(caller) -> Result<(), wasmi::Error> {

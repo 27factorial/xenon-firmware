@@ -23,8 +23,8 @@ macro_rules! singleton {
 macro_rules! cvt {
     ( $($v:tt as $t:tt),* $(,)? ) => {{
         let x = ($(
-            <$t as $crate::app::wasm::convert::TryFromWasm>::try_from_wasm($v)
-                .map_err(|e| $crate::app::wasm::types::Error::InvalidValue(e.0))?
+            <$t as $crate::app::convert::TryFromWasm>::try_from_wasm($v)
+                .map_err(|e| $crate::app::types::Error::InvalidValue(e.0))?
         ),*);
 
         x
@@ -73,9 +73,9 @@ macro_rules! syscalls {
         #[allow(unused_parens, clippy::too_many_arguments)]
         $vis fn $name (
             #[allow(unused_variables, unused_mut)]
-            mut $caller: wasmi::Caller<'_, $crate::app::wasm::types::Env>,
+            mut $caller: wasmi::Caller<'_, $crate::app::types::Env>,
             $(
-                $param : <$cvt_ty as $crate::app::wasm::convert::TryFromWasm>::WasmTy
+                $param : <$cvt_ty as $crate::app::convert::TryFromWasm>::WasmTy
             ),*
          ) $( -> $ret)? {
             let (

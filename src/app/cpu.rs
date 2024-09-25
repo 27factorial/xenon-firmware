@@ -1,5 +1,6 @@
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_executor::SendSpawner;
 use esp_hal::cpu_control::{AppCoreGuard, CpuControl, Stack};
 use esp_hal::interrupt::Priority;
 use esp_hal::peripherals::CPU_CTRL;
@@ -9,13 +10,22 @@ use esp_hal::Cpu;
 use esp_hal_embassy::InterruptExecutor;
 use static_cell::StaticCell;
 
-use crate::app::wasm;
+use super::types::Executor;
 
 const STACK_SIZE: usize = 32 * 1024;
 const APP_SWI: u8 = 0;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static STACK: StaticCell<Stack<STACK_SIZE>> = StaticCell::new();
+
+static WASM_MODULE: &[u8] = include_bytes!("../../assets/test-app.wasm");
+
+fn start(rng: Trng<'static>, spawner: SendSpawner) -> Result<(), wasmi::Error> {
+    // TODO: Load wasm module from "filesystem" and handle errors more gracefully.
+    let mut executor = Executor::new(rng, spawner, WASM_MODULE)?;
+
+    executor.run()
+}
 
 #[clippy::has_significant_drop]
 pub struct AppCpu<'a> {
@@ -71,7 +81,7 @@ impl<'a> AppCpu<'a> {
         let async_executor = APP_EXECUTOR.init(InterruptExecutor::new(interrupt));
         let spawner = async_executor.start(Priority::max());
 
-        if let Err(e) = wasm::start(rng, spawner) {
+        if let Err(e) = start(rng, spawner) {
             log::error!("app error occurred: {e}")
         }
 

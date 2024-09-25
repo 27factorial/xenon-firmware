@@ -1,4 +1,4 @@
-use crate::app::wasm::types::{Env, Error};
+use crate::app::types::{Env, Error};
 use crate::macros::cvt;
 use log::Level as LogLevel;
 use wasmi::Caller;

@@ -1,4 +1,4 @@
-use crate::app::wasm::types::{Env, Error};
+use crate::app::types::{Env, Error};
 use crate::driver::lcd;
 use crate::macros::syscalls;
 use crate::widget::bitmap::{
