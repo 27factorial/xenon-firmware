@@ -21,6 +21,7 @@ use embassy_executor::task;
 use embassy_futures::yield_now;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as CsRawMutex;
 use embassy_sync::mutex::Mutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::{DrawTarget, OriginDimensions, Size};
@@ -70,16 +71,15 @@ pub async fn start(
     mosi: GpioPin<9>,
     cs: GpioPin<44>,
     dma: Dma<'static>,
-    clocks: &'static Clocks<'static>,
 ) -> ! {
     let mut local_buffer;
-    let (lcd_tx, lcd_tx_descriptors, lcd_rx, lcd_rx_descriptors) =
+    let (lcd_rx, lcd_rx_descriptors, lcd_tx, lcd_tx_descriptors) =
         dma_buffers!(LCD_DMA_BUFFER_SIZE);
 
     let tx = DmaTxBuf::new(lcd_tx_descriptors, lcd_tx).unwrap();
     let rx = DmaRxBuf::new(lcd_rx_descriptors, lcd_rx).unwrap();
 
-    let spi = Spi::new(spi, LCD_SPI_FREQ.Hz(), SpiMode::Mode0, clocks)
+    let spi = Spi::new(spi, LCD_SPI_FREQ.Hz(), SpiMode::Mode0)
         .with_sck(sck)
         .with_mosi(mosi)
         .with_bit_order(SpiBitOrder::LSBFirst, SpiBitOrder::LSBFirst)
@@ -87,7 +87,7 @@ pub async fn start(
             dma.channel0
                 .configure_for_async(false, DmaPriority::Priority0),
         )
-        .with_buffers(tx, rx);
+        .with_buffers(rx, tx);
 
     let mut lcd = Lcd::new(spi, cs);
 
@@ -167,7 +167,7 @@ impl<Spi> Lcd<Spi> {
             LCD_INITIALIZED,
             "attempted to initialize LCD more than once",
             || {
-                let cs = Output::new(cs, Level::Low);
+                let cs = Output::new_typed(cs, Level::Low);
 
                 Self {
                     spi,

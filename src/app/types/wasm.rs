@@ -1,25 +1,22 @@
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::RangeBounds;
-use core::result;
 use core::sync::atomic::{self, Ordering};
 use critical_section as cs;
 use embassy_executor::{SendSpawner, SpawnToken};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as CsRawMutex;
 use embassy_sync::mutex::{Mutex, MutexGuard};
+use embassy_time::Timer;
 use esp_hal::rng::Trng;
 use esp_hal::Cpu;
-use thiserror::Error;
-use wasmi::core::HostError;
+use wasmi::core::ValType;
 use wasmi::{
-    Config, Engine, Instance, Linker, Memory, Module, Store, StoreContext, StoreContextMut,
-    StoreLimits, StoreLimitsBuilder,
+    Config, Engine, Extern, FuncRef, Instance, Linker, Memory, Module, Store, StoreContext,
+    StoreContextMut, StoreLimits, StoreLimitsBuilder, Table, TypedResumableCall,
 };
 
-const SYSCALL_NAMESPACE: &str = "__xenon_syscall";
-const ENTRY_POINT: &str = "__xenon_start";
-const WASM_MEMORY_LIMIT: usize = 1024 * 1024; // 1 MiB
+use super::error::{Error, Result};
+use super::{PollRequest, Registration, RegistrationQueue, WakerFunc};
 
 macro_rules! link_syscalls {
     (
@@ -37,11 +34,18 @@ macro_rules! link_syscalls {
     }
 }
 
+const SYSCALL_NAMESPACE: &str = "__xenon_syscall";
+const ENTRY_POINT: &str = "__xenon_start";
+const MEMORY_NAME: &str = "memory";
+const FUNCTION_TABLE_NAME: &str = "__indirect_function_table";
+const WASM_MEMORY_LIMIT: usize = 1 << 20; // 1 MiB
+
 fn link_syscalls(linker: &mut Linker<Env>) -> Result<()> {
     use crate::app::syscall::*;
 
     link_syscalls![
         (stdio::print, "print"),
+        (stdio::print, "eprint"),
         (stdio::log, "log"),
         (time::get_time, "get_time"),
         (widget::draw_arc, "draw_arc"),
@@ -62,18 +66,16 @@ fn link_syscalls(linker: &mut Linker<Env>) -> Result<()> {
         (misc::clear_buffer, "clear_buffer"),
         (misc::clone_binary_data, "clone_binary_data"),
         (misc::drop_binary_data, "drop_binary_data"),
-        (asynch::cs_acquire, "cs_acquire"),
-        (asynch::cs_release, "cs_release"),
-        (asynch::wait, "wait");
+        (asynch::wait, "wait"),
+        (asynch::poll, "poll"),
+        (io::schedule_timer, "schedule_timer"),
+        (io::schedule_io, "schedule_io"),
+        (panic::panic, "panic");
         linker
     ];
 
     Ok(())
 }
-
-pub type Result<T> = result::Result<T, wasmi::Error>;
-
-pub type MutexEnv = Mutex<CsRawMutex, Env>;
 
 pub struct Executor {
     instance: Instance,
@@ -95,9 +97,7 @@ impl Executor {
                 .build(),
         };
 
-        let env = Env::new(rng, spawner, limits);
-
-        let mut store = Store::new(&engine, env);
+        let mut store = Store::new(&engine, Env::new(rng, spawner, limits));
         store.limiter(|env| &mut env.limits.store);
 
         let mut linker = Linker::new(&engine);
@@ -106,20 +106,63 @@ impl Executor {
         let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
 
         let memory = instance
-            .get_memory(&store, "memory")
+            .get_memory(&store, MEMORY_NAME)
             .ok_or(Error::NoMemory)?;
 
-        store.data().lock_sync().set_memory(memory);
+        let function_table = instance
+            .get_export(&store, FUNCTION_TABLE_NAME)
+            .and_then(Extern::into_table)
+            .ok_or(Error::NoFunctionTable)?;
+
+        {
+            let mut env_data = store.data().lock_data_blocking();
+            env_data.set_memory(memory);
+            env_data.set_funcs(&store, function_table)?;
+        }
 
         Ok(Self { instance, store })
     }
 
-    pub fn run(&mut self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
+        let env = self.store.data().clone();
+
         let entry = self
             .instance
             .get_typed_func::<(), ()>(&self.store, ENTRY_POINT)?;
 
-        entry.call(&mut self.store, ())?;
+        let mut entry_handle = entry.call_resumable(&mut self.store, ())?;
+
+        while let TypedResumableCall::Resumable(resumable) = entry_handle {
+            let Some(&request) = resumable.host_error().downcast_ref::<PollRequest>() else {
+                // Since wasmi guarantees that resumable.host_error() will never be a Wasm trap, and
+                // the only other error type returned by host calls is `Error`, the downcast should
+                // unconditionally return Some(_).
+                let &host_error = resumable.host_error().downcast_ref::<Error>().unwrap();
+                return Err(host_error.into());
+            };
+
+            match request {
+                PollRequest::Wait => {
+                    log::trace!(target: "Wasm executor", "waiting for a task to wake up");
+                    self.poll_wakers(&env).await?;
+                }
+                PollRequest::Poll => {
+                    self.poll_wakers(&env).await?;
+                }
+            }
+
+            entry_handle = resumable.resume(&mut self.store, &[])?;
+        }
+
+        Ok(())
+    }
+
+    async fn poll_wakers(&mut self, env: &Env) -> Result<()> {
+        log::trace!(target: "Wasm executor", "polling wakers");
+        while let Some(registration) = env.registrations.try_pop().await {
+            registration.wake(&mut self.store)?;
+            log::trace!(target: "Wasm executor", "woke up task at wasm address {:#x}", registration.data)
+        }
 
         Ok(())
     }
@@ -128,18 +171,22 @@ impl Executor {
 #[derive(Clone)]
 pub struct Env {
     data: Arc<Mutex<CsRawMutex, EnvData>>,
+    registrations: RegistrationQueue,
+    spawner: SendSpawner,
     limits: Limits,
 }
 
 impl Env {
     pub fn new(rng: Trng<'static>, spawner: SendSpawner, limits: Limits) -> Self {
         Self {
-            data: Arc::new(Mutex::new(EnvData::new(rng, spawner))),
+            data: Arc::new(Mutex::new(EnvData::new(rng))),
+            registrations: RegistrationQueue::new(),
+            spawner,
             limits,
         }
     }
 
-    pub fn lock_sync(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
+    pub fn lock_data_blocking(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
         loop {
             match self.data.try_lock() {
                 Ok(guard) => break guard,
@@ -148,27 +195,35 @@ impl Env {
         }
     }
 
-    pub async fn lock(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
+    pub async fn lock_data(&self) -> MutexGuard<'_, CsRawMutex, EnvData> {
         self.data.lock().await
+    }
+
+    pub async fn push_registration(&self, registration: Registration) {
+        self.registrations.push(registration).await;
+    }
+
+    pub fn spawn<S: Send>(&self, token: SpawnToken<S>) -> Result<()> {
+        self.spawner
+            .spawn(token)
+            .map_err(|_| Error::TooManyTasks.into())
     }
 }
 
 pub struct EnvData {
     rng: Trng<'static>,
-    spawner: SendSpawner,
     binary_data: BinaryData,
-    critical_sections: Vec<(Cpu, cs::RestoreState)>,
+    funcs: Option<Table>,
     memory: Option<Memory>,
     notified: bool,
 }
 
 impl EnvData {
-    pub fn new(rng: Trng<'static>, spawner: SendSpawner) -> Self {
+    fn new(rng: Trng<'static>) -> Self {
         Self {
-            spawner,
             rng,
             binary_data: BinaryData::new(),
-            critical_sections: Vec::new(),
+            funcs: None,
             memory: None,
             notified: false,
         }
@@ -179,12 +234,35 @@ impl EnvData {
     }
 
     pub fn memory(&self) -> Memory {
-        self.memory.unwrap()
+        self.memory.expect("env memory was not set")
     }
 
-    pub fn memory_range<'a>(
+    pub fn set_funcs<'a>(
+        &mut self,
+        ctx: impl Into<StoreContext<'a, Env>>,
+        table: Table,
+    ) -> Result<()> {
+        if matches!(table.ty(ctx.into()).element(), ValType::FuncRef) {
+            self.funcs = Some(table);
+            Ok(())
+        } else {
+            Err(Error::NoFunctionTable.into())
+        }
+    }
+
+    pub fn get_func<'a>(&self, ctx: impl Into<StoreContext<'a, Env>>, index: u32) -> FuncRef {
+        // Self::set_funcs verifies that the self.funcs is a funcref table, so calling val.funcref()
+        // .unwrap() should never panic unless self.funcs is set through other means.
+        self.funcs
+            .expect("env function table was not set")
+            .get(ctx.into(), index)
+            .map(|val| *val.funcref().unwrap())
+            .unwrap_or_else(FuncRef::null)
+    }
+
+    pub fn memory_range<'a, T>(
         &self,
-        ctx: impl Into<StoreContext<'a, Self>>,
+        ctx: impl Into<StoreContext<'a, Env>>,
         range: impl RangeBounds<usize>,
     ) -> Option<&'a [u8]> {
         let ctx = ctx.into();
@@ -196,7 +274,7 @@ impl EnvData {
 
     pub fn memory_range_mut<'a>(
         &self,
-        ctx: impl Into<StoreContextMut<'a, Self>>,
+        ctx: impl Into<StoreContextMut<'a, Env>>,
         range: impl RangeBounds<usize>,
     ) -> Option<&'a mut [u8]> {
         let ctx = ctx.into();
@@ -232,33 +310,7 @@ impl EnvData {
         u64::from_ne_bytes(buf)
     }
 
-    pub fn push_critical_section(&mut self) {
-        let cpu = esp_hal::get_core();
-        let state = unsafe { cs::acquire() };
-        atomic::fence(Ordering::SeqCst);
-
-        self.critical_sections.push((cpu, state));
-    }
-
-    pub fn pop_critical_section(&mut self) -> Result<()> {
-        match self.critical_sections.pop() {
-            Some((cpu, state)) => unsafe {
-                if cpu == esp_hal::get_core() {
-                    atomic::fence(Ordering::SeqCst);
-
-                    // SAFETY: the state passed to `release` is the most recent critical section
-                    // `RestoreState` that was created in wasm, and comes from the current core.
-                    cs::release(state);
-                    Ok(())
-                } else {
-                    panic!("attempted to release critical section from a different core");
-                }
-            },
-            None => Err(Error::MismatchedCriticalSection.into()),
-        }
-    }
-
-    pub fn is_notified(&mut self) -> bool {
+    pub fn notified(&self) -> bool {
         self.notified
     }
 
@@ -268,38 +320,6 @@ impl EnvData {
 
     pub fn random_bytes(&mut self, bytes: &mut [u8]) {
         self.rng.read(bytes)
-    }
-
-    pub fn spawn<S: Send>(&self, token: SpawnToken<S>) -> Result<()> {
-        self.spawner
-            .spawn(token)
-            .map_err(|_| Error::TooManyTasks.into())
-    }
-}
-
-impl Drop for EnvData {
-    fn drop(&mut self) {
-        let current_core = esp_hal::get_core();
-
-        // Critical section `RestoreState`s are pushed to the end of the vector after calling
-        // `acquire`, so when dropped, every element must be released with `release` in the reverse
-        // order they were pushed, otherwise it could cause UB. This only comes up if there was some
-        // error in wasm-land which caused the app to abort before a critical section was properly
-        // released.
-        //
-        // SAFETY: every `RestoreState` in the function is guaranteed to have come from a
-        // corresponding `acquire` and is released in the opposite order that it was pushed,
-        // ensuring that nested critical sections properly release their `RestoreState`.
-        self.critical_sections
-            .drain(..)
-            .rev()
-            .for_each(|(core, state)| unsafe {
-                if core == current_core {
-                    cs::release(state);
-                } else {
-                    panic!("attempted to release critical section from a different core");
-                }
-            });
     }
 }
 
@@ -381,57 +401,3 @@ impl BinaryData {
 pub struct Limits {
     pub store: StoreLimits,
 }
-
-#[repr(u8)]
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("wasm module did not export any linear memory")]
-    NoMemory,
-    #[error("invalid value for type {0}")]
-    InvalidValue(&'static str),
-    #[error(
-        "memory range [{}, {}) is invalid UTF-8 (valid up to index {} in range)", 
-        start, start + len, valid_up_to,
-    )]
-    InvalidUtf8 {
-        start: usize,
-        len: usize,
-        valid_up_to: usize,
-    },
-    #[error("invalid memory range [{}, {})", start, start + end)]
-    InvalidMemoryRange { start: usize, end: usize },
-    #[error("wasm function `{0}` not found")]
-    FunctionNotFound(String),
-    #[error("invalid log level {0}")]
-    InvalidLogLevel(u32),
-    #[error("invalid data id {0}")]
-    InvalidId(i32),
-    #[error("attempted to spawn too many tasks")]
-    TooManyTasks,
-    #[error("undefined behavior: mismatched critical section release")]
-    MismatchedCriticalSection,
-    #[error("module panicked")]
-    Panicked,
-}
-
-impl From<Error> for wasmi::Error {
-    fn from(value: Error) -> Self {
-        wasmi::Error::host(value)
-    }
-}
-
-impl HostError for Error {}
-
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Error)]
-pub enum AsyncEvent {
-    #[error("`wait` syscall called")]
-    Wait,
-}
-
-impl From<AsyncEvent> for wasmi::Error {
-    fn from(value: AsyncEvent) -> Self {
-        wasmi::Error::host(value)
-    }
-}
-
-impl HostError for AsyncEvent {}

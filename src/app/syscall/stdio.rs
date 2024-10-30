@@ -1,5 +1,6 @@
 use crate::app::types::{Env, Error};
-use crate::macros::cvt;
+use crate::macros::syscall;
+use esp_println::print;
 use log::Level as LogLevel;
 use wasmi::Caller;
 
@@ -9,17 +10,17 @@ const LOG_LEVEL_INFO: u32 = 3;
 const LOG_LEVEL_DEBUG: u32 = 4;
 const LOG_LEVEL_TRACE: u32 = 5;
 
-pub fn print(
+#[syscall]
+pub extern "wasm" fn print(
     caller: Caller<'_, Env>,
-    ptr: u32,
-    len: u32,
-    newline: u32,
+    ptr: usize,
+    len: usize,
+    newline: bool,
 ) -> Result<(), wasmi::Error> {
-    let (ptr, len, newline) = cvt!(ptr as usize, len as usize, newline as bool);
     let end = ptr + len;
     let new_line = if newline { "\n" } else { "" };
 
-    let memory = caller.data().lock_sync().memory();
+    let memory = caller.data().lock_data_blocking().memory();
     let range = memory
         .data(&caller)
         .get(ptr..end)
@@ -31,13 +32,18 @@ pub fn print(
         valid_up_to: e.valid_up_to(),
     })?;
 
-    esp_println::print!("{string}{new_line}");
+    print!("{string}{new_line}");
 
     Ok(())
 }
 
-pub fn log(caller: Caller<'_, Env>, level: u32, ptr: u32, len: u32) -> Result<(), wasmi::Error> {
-    let (ptr, len) = cvt!(ptr as usize, len as usize);
+#[syscall]
+pub extern "wasm" fn log(
+    caller: Caller<'_, Env>,
+    level: u32,
+    ptr: usize,
+    len: usize,
+) -> Result<(), wasmi::Error> {
     let end = ptr + len;
 
     let level = match level {
@@ -49,7 +55,7 @@ pub fn log(caller: Caller<'_, Env>, level: u32, ptr: u32, len: u32) -> Result<()
         unknown => return Err(Error::InvalidLogLevel(unknown).into()),
     };
 
-    let memory = caller.data().lock_sync().memory();
+    let memory = caller.data().lock_data_blocking().memory();
     let range = memory
         .data(&caller)
         .get(ptr..end)

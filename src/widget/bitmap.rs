@@ -373,10 +373,6 @@ impl Bitmap {
         self.height
     }
 
-    pub(crate) fn data(&self) -> &[u8] {
-        &self.data
-    }
-
     pub fn set_pixel(&mut self, x: u8, y: u8, color: PixelColor) {
         set_pixel_internal(self.width, self.height, x, y, color, &mut self.data)
     }

@@ -1,11 +1,34 @@
 use core::alloc::{GlobalAlloc, Layout};
+use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 use critical_section as cs;
+use esp_hal::macros::ram;
 use linked_list_allocator::Heap;
 use spin::mutex::TicketMutex;
+use spin::Lazy;
+use static_cell::ConstStaticCell;
+
+const WIFI_HEAP_BYTES: usize = 1 << 17; // 128 KiB
 
 #[global_allocator]
 pub static ALLOCATOR: Allocator = Allocator::new();
+
+#[used]
+static WIFI_ALLOCATOR: Lazy<Allocator> = Lazy::new(|| {
+    #[ram]
+    #[used]
+    static WIFI_HEAP: ConstStaticCell<WifiHeap> =
+        ConstStaticCell::new(WifiHeap([MaybeUninit::uninit(); WIFI_HEAP_BYTES]));
+
+    let allocator = Allocator::new();
+    let wifi_heap = WIFI_HEAP.take();
+
+    unsafe {
+        allocator.init(wifi_heap.0.as_mut_ptr().cast(), wifi_heap.0.len());
+    }
+
+    allocator
+});
 
 pub struct Allocator(TicketMutex<Heap>);
 
@@ -57,4 +80,19 @@ unsafe impl GlobalAlloc for Allocator {
                 .deallocate(NonNull::new_unchecked(ptr), layout)
         })
     }
+}
+
+#[repr(C, align(4))]
+struct WifiHeap([MaybeUninit<u8>; WIFI_HEAP_BYTES]);
+
+// esp-wifi required functions
+
+#[no_mangle]
+pub extern "C" fn esp_wifi_free_internal_heap() -> usize {
+    WIFI_ALLOCATOR.free()
+}
+
+#[no_mangle]
+pub extern "C" fn esp_wifi_allocate_from_internal_ram(size: usize) -> *mut u8 {
+    unsafe { WIFI_ALLOCATOR.alloc(Layout::from_size_align(size, 4).expect("valid size")) }
 }

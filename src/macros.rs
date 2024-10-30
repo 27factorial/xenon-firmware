@@ -20,77 +20,27 @@ macro_rules! singleton {
     };
 }
 
-macro_rules! cvt {
-    ( $($v:tt as $t:tt),* $(,)? ) => {{
-        let x = ($(
-            <$t as $crate::app::convert::TryFromWasm>::try_from_wasm($v)
-                .map_err(|e| $crate::app::types::Error::InvalidValue(e.0))?
-        ),*);
+/// Creates an inline embassy spawn token.
+macro_rules! task {
+    (
+        (
+            $($arg:ident : $arg_ty:ty $(= $arg_expr:expr)? ),* $(,)?
+        )  { $($tt:tt)* }
+    ) => {{
+        #[embassy_executor::task]
+        #[inline(always)]
+        async fn __xenon_anon_task(
+            $($arg : $arg_ty),*
+        ) { $($tt)* }
 
-        x
-    }};
+        $(
+            $(let $arg = $arg_expr;)?
+        )*
+
+        __xenon_anon_task($($arg),*)
+    }}
 }
 
-macro_rules! syscalls {
-    (
-        $(
-            $(#[$meta:meta])*
-            $vis:vis extern "wasm" fn $name:ident (
-                $( $param:ident $( : $cvt_ty:tt )? ),* $(,)?
-            ) $(-> $ret:ty )? $code:block
-        )*
-    ) => {
-        $(
-            syscalls! {
-                $(#[$meta])*
-                $vis fn $name (
-                    $( $param $( : $cvt_ty )?),*
-                ) $(-> $ret )? $code
-            }
-        )*
-    };
-    (
-        $(#[$meta:meta])*
-        $vis:vis fn $name:ident (
-            $caller:ident
-        ) $(-> $ret:ty )? $code:block
-    ) => {
-        syscalls! {
-            $(#[$meta])*
-            $vis fn $name (
-                $caller,
-            ) $(-> $ret )? $code
-        }
-    };
-    (
-        $(#[$meta:meta])*
-        $vis:vis fn $name:ident (
-            $caller:ident,
-            $($param:ident : $cvt_ty:tt),*
-        ) $(-> $ret:ty )? $code:block
-    ) => {
-        $(#[$meta])*
-        #[allow(unused_parens, clippy::too_many_arguments)]
-        $vis fn $name (
-            #[allow(unused_variables, unused_mut)]
-            mut $caller: wasmi::Caller<'_, $crate::app::types::Env>,
-            $(
-                $param : <$cvt_ty as $crate::app::convert::TryFromWasm>::WasmTy
-            ),*
-         ) $( -> $ret)? {
-            let (
-                $(
-                    $param
-                ),*
-            ) = $crate::macros::cvt!(
-                $(
-                    $param as $cvt_ty
-                ),*
-            );
 
-            $code
-         }
-    };
-}
-
-pub(crate) use {cvt, make_static, singleton, syscalls};
+pub(crate) use xenon_proc_macros::syscall;
+pub(crate) use {make_static, singleton, task};

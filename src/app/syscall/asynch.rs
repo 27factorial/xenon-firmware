@@ -1,30 +1,32 @@
-use crate::{app::types::AsyncEvent, macros::syscalls};
+use crate::app::types::{Env, Error, PollRequest, WakerFunc};
+use crate::macros::syscall;
+use crate::macros::task;
+use embassy_time::{Duration, Instant, Timer};
+use wasmi::{Caller, Func};
 
-syscalls! {
-    pub extern "wasm" fn cs_acquire(caller) -> Result<(), wasmi::Error> {
-        let mut env_data = caller.data().lock_sync();
+#[syscall]
+pub extern "wasm" fn wait(caller: Caller<'_, Env>) -> Result<(), wasmi::Error> {
+    let mut env_data = caller.data().lock_data_blocking();
 
-        env_data.push_critical_section();
-
+    // After calling `resume` on the resumable Wasm function, wasmi will resume here. The
+    // `notified` flag is used to ensure we don't get into an infinite loop of returning
+    // `PollRequest::Wait`.
+    if env_data.notified() {
+        env_data.set_notified(false);
         Ok(())
+    } else {
+        Err(PollRequest::Wait.into())
     }
+}
 
-    pub extern "wasm" fn cs_release(caller) -> Result<(), wasmi::Error> {
-        let mut env_data = caller.data().lock_sync();
-        env_data.pop_critical_section()
-    }
+#[syscall]
+pub extern "wasm" fn poll(caller: Caller<'_, Env>) -> Result<(), wasmi::Error> {
+    let mut env_data = caller.data().lock_data_blocking();
 
-    pub extern "wasm" fn wait(caller) -> Result<(), wasmi::Error> {
-        let mut env_data = caller.data().lock_sync();
-
-        // After calling `resume` on the resumable Wasm function, wasmi will resume here. The 
-        // `notified` flag is used to ensure we don't get into an infinite loop of returning 
-        // `AsyncEvent::Wait`.
-        if env_data.is_notified() {
-            env_data.set_notified(false);
-            Ok(())
-        } else {
-            Err(AsyncEvent::Wait.into())
-        }        
+    if env_data.notified() {
+        env_data.set_notified(false);
+        Ok(())
+    } else {
+        Err(PollRequest::Poll.into())
     }
 }

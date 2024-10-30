@@ -2,17 +2,18 @@
 runner = "espflash flash --monitor"
 
 [env]
-ESP_LOGLEVEL = "INFO"
+ESP_LOG = "DEBUG"
+XENON_LOGLEVEL = "DEBUG"
 EMBASSY_EXECUTOR_TASK_ARENA_SIZE = "16384"
 
 # EKV constants
-EKV_ALIGN = "4"               # The ESP32S3's NOR flash is aligned to 32 bits (4 bytes).
-EKV_MAX_CHUNK_SIZE = "4096"   # One page.
-EKV_MAX_KEY_SIZE = "32"       # Keys are always SHA-256 hashes.
-EKV_MAX_PAGE_COUNT = "1776"   # Data partition size divided by page size (7274496 / 4096).
-EKV_MAX_VALUE_SIZE = "262144" # 256 KiB.
-EKV_PAGE_SIZE = "4096"        # The ESP32S3's NOR flash page size is 4096.
-EKV_SCRATCH_PAGE_COUNT = "4"  # Used for compaction in EKV, can be changed to tweak performance characteristics.
+EKV_ALIGN = "4"              # The ESP32S3's NOR flash is aligned to 32 bits (4 bytes).
+EKV_MAX_CHUNK_SIZE = "4096"  # One page.
+EKV_MAX_KEY_SIZE = "32"      # Keys are always SHA-256 hashes.
+EKV_MAX_PAGE_COUNT = "1776"  # Data partition size divided by page size (7274496 / 4096).
+EKV_MAX_VALUE_SIZE = "4096"  # 4 KiB. File and directory chunks have this size.
+EKV_PAGE_SIZE = "4096"       # The ESP32S3's NOR flash page size is 4096.
+EKV_SCRATCH_PAGE_COUNT = "4" # Used for compaction in EKV, can be changed to tweak performance characteristics.
 
 [build]
 rustflags = ["-C", "link-arg=-nostartfiles", "-C", "link-arg=-Trom_functions.x"]

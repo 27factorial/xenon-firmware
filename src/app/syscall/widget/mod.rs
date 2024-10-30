@@ -1,5 +1,5 @@
-mod primitive;
 mod bitmap;
+mod primitive;
 
-pub use primitive::*;
 pub use bitmap::*;
+pub use primitive::*;
